@@ -8,13 +8,6 @@
 // --------------------------------------------------------------------------------------------------------------------
 namespace DaveMcKeown.TidyTabs
 {
-    using System;
-    using System.Collections.Concurrent;
-    using System.ComponentModel.Design;
-    using System.Diagnostics.CodeAnalysis;
-    using System.Linq;
-    using System.Runtime.InteropServices;
-
     using DaveMcKeown.TidyTabs.Properties;
 
     using EnvDTE;
@@ -24,20 +17,27 @@ namespace DaveMcKeown.TidyTabs
     using Microsoft.VisualStudio;
     using Microsoft.VisualStudio.Shell;
     using Microsoft.VisualStudio.Shell.Interop;
-
+    using System;
+    using System.Collections.Concurrent;
+    using System.ComponentModel.Design;
+    using System.Diagnostics.CodeAnalysis;
+    using System.Linq;
+    using System.Runtime.InteropServices;
+    using System.Threading;
     using Task = System.Threading.Tasks.Task;
 
     /// <summary>
     ///     The main Visual Studio package for the Tidy Tabs extension
     /// </summary>
-    [ProvideOptionPage(typeof(TidyTabsOptionPage), "Tidy Tabs", "Options", 1000, 1001, false)]
-    [PackageRegistration(UseManagedResourcesOnly = true)]
     [InstalledProductRegistration("#110", "#112", Version, IconResourceID = 400)]
     [ProvideMenuResource("Menus.ctmenu", 1)]
-    [ProvideAutoLoad(UIContextGuids80.SolutionExists)]
-    [Guid(GuidList.guidTidyTabsPkgString)]
+	[Guid(GuidList.guidTidyTabsPkgString)]
     [SuppressMessage("StyleCop.CSharp.ReadabilityRules", "SA1126:PrefixCallsCorrectly", Justification = "Reviewed")]
-    public sealed class TidyTabsPackage : Package, IVsBroadcastMessageEvents, IDisposable
+	[PackageRegistration(UseManagedResourcesOnly = true, AllowsBackgroundLoading = true)]
+	[ProvideAutoLoad(VSConstants.UICONTEXT.NoSolution_string, PackageAutoLoadFlags.BackgroundLoad)]
+	[ProvideAutoLoad(VSConstants.UICONTEXT.SolutionExists_string, PackageAutoLoadFlags.BackgroundLoad)]
+	[ProvideOptionPage(typeof(TidyTabsOptionPage), "Tidy Tabs", "Options", 1000, 1001, false)]
+	public sealed class TidyTabsPackage : AsyncPackage, IVsBroadcastMessageEvents, IDisposable
     {
         public const string Version = "1.10.1";
         /// <summary>
@@ -190,50 +190,52 @@ namespace DaveMcKeown.TidyTabs
             return VSConstants.S_OK;
         }
 
-        /// <summary>
-        ///     Initialization of the package; this method is called right after the package is sited, so this is the place
-        ///     where you can put all the initialization code that rely on services provided by VisualStudio.
-        /// </summary>
-        protected override void Initialize()
-        {
-            base.Initialize();
+		/// <summary>
+		///     Initialization of the package; this method is called right after the package is sited, so this is the place
+		///     where you can put all the initialization code that rely on services provided by VisualStudio.
+		/// </summary>
+		protected override async Task InitializeAsync(CancellationToken cancellationToken, IProgress<ServiceProgressData> progress)
+		{
+			System.Diagnostics.Debug.WriteLine("TidyTabs: InitializeAsync starting");
+			await base.InitializeAsync(cancellationToken, progress);
+			System.Diagnostics.Debug.WriteLine("TidyTabs: InitializeAsync completed");
+			try
+			{
+				if (VisualStudio.Solution != null)
+				{
+					Log.Message("Starting Tidy Tabs inside Visual Studio {0} {1} for solution {2}", VisualStudio.Edition, VisualStudio.Version, VisualStudio.Solution.FullName);
+				}
 
-            try
-            {
-                if (VisualStudio.Solution != null)
-                {
-                    Log.Message("Starting Tidy Tabs inside Visual Studio {0} {1} for solution {2}", VisualStudio.Edition, VisualStudio.Version, VisualStudio.Solution.FullName);
-                }
+				await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+				windowEvents = VisualStudio.Events.WindowEvents;
+				documentEvents = VisualStudio.Events.DocumentEvents;
+				textEditorEvents = VisualStudio.Events.TextEditorEvents;
+				solutionEvents = VisualStudio.Events.SolutionEvents;
+				buildEvents = VisualStudio.Events.BuildEvents;
 
-                windowEvents = VisualStudio.Events.WindowEvents;
-                documentEvents = VisualStudio.Events.DocumentEvents;
-                textEditorEvents = VisualStudio.Events.TextEditorEvents;
-                solutionEvents = VisualStudio.Events.SolutionEvents;
-                buildEvents = VisualStudio.Events.BuildEvents;
+				windowEvents.WindowActivated += WindowEventsWindowActivated;
+				documentEvents.DocumentClosing += DocumentEventsOnDocumentClosing;
+				documentEvents.DocumentSaved += DocumentEventsOnDocumentSaved;
+				textEditorEvents.LineChanged += TextEditorEventsOnLineChanged;
+				solutionEvents.Opened += SolutionEventsOnOpened;
+				buildEvents.OnBuildBegin += BuildEventsOnOnBuildBegin;
 
-                windowEvents.WindowActivated += WindowEventsWindowActivated;
-                documentEvents.DocumentClosing += DocumentEventsOnDocumentClosing;
-                documentEvents.DocumentSaved += DocumentEventsOnDocumentSaved;
-                textEditorEvents.LineChanged += TextEditorEventsOnLineChanged;
-                solutionEvents.Opened += SolutionEventsOnOpened;
-                buildEvents.OnBuildBegin += BuildEventsOnOnBuildBegin;
+				shell = (IVsShell)GetService(typeof(SVsShell));
 
-                shell = (IVsShell)GetService(typeof(SVsShell));
-
-                if (shell != null)
-                {
-                    shell.AdviseBroadcastMessages(this, out shellCookie);
-                }
+				if (shell != null)
+				{
+					shell.AdviseBroadcastMessages(this, out shellCookie);
+				}
 
                 OleMenuCommandService menuCommandService = GetService(typeof(IMenuCommandService)) as OleMenuCommandService;
 
-                if (menuCommandService != null)
-                {
-                    CommandID menuCommandId = new CommandID(GuidList.guidTidyTabsCmdSet, (int)PkgCmdIDList.cmdidTidyTabs);
-                    MenuCommand menuItem = new MenuCommand(TidyTabsMenuItemCommandActivated, menuCommandId);
-                    menuCommandService.AddCommand(menuItem);
-                }
-            }
+				if (menuCommandService != null)
+				{
+					CommandID menuCommandId = new CommandID(GuidList.guidTidyTabsCmdSet, (int)PkgCmdIDList.cmdidTidyTabs);
+					MenuCommand menuItem = new MenuCommand(TidyTabsMenuItemCommandActivated, menuCommandId);
+					menuCommandService.AddCommand(menuItem);
+				}
+			}
             catch (Exception ex)
             {
                 Log.Exception(ex);
@@ -249,8 +251,9 @@ namespace DaveMcKeown.TidyTabs
             {
                 lastAction = DateTime.Now;
 
-                Task.Factory.StartNew(() => TidyTabs(true));
-            }
+				ThreadHelper.JoinableTaskFactory.RunAsync(async () => await TidyTabsAsync(true))
+					.FileAndForget("TidyTabs error on OnBuildBegin");
+			}
             catch (Exception ex)
             {
                 Log.Exception(ex);
@@ -273,136 +276,158 @@ namespace DaveMcKeown.TidyTabs
 
                 if (Settings.MaxOpenTabs > 0)
                 {
-                    CloseOldestWindows();                    
+                    CloseOldestWindows();
                 }
             }
         }
 
-        /// <summary>
-        /// Closes a window if it is saved, not active, and not pinned
-        /// </summary>
-        /// <param name="window">The document window</param>
-        /// <returns>True if window was closed</returns>
-        private bool CloseDocumentWindow(Window window)
+		/// <summary>
+		/// Closes a window if it is saved, not active, and not pinned
+		/// </summary>
+		/// <param name="window">The document window</param>
+		/// <returns>True if window was closed</returns>
+		private bool CloseDocumentWindow(Window window)
+		{
+
+			DateTime lastWindowAction;
+
+			try
+			{
+				if (window != VisualStudio.ActiveWindow
+					&& (window.Document == null
+						|| (window.Document.Saved && !Provider.IsWindowPinned(window.Document.FullName))))
+				{
+					documentLastSeen.TryRemove(window, out lastWindowAction);
+					window.Close(vsSaveChanges.vsSaveChangesNo);
+					return true;
+				}
+			}
+			catch (Exception ex)
+			{
+				System.Diagnostics.Debug.WriteLine($"TidyTabs: CloseDocumentWindow failed: {ex}");
+				// Don't remove on failure - let it retry later
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		///     Closes stale windows that haven't been viewed recently
+		/// </summary>
+		private void CloseStaleWindows()
         {
+			var allWindows = VisualStudio.Windows.GetDocumentWindows().ToDictionary(x => x);
+			var closeMaxTabs = allWindows.Count - Settings.TabCloseThreshold;
+			var inactiveWindows = documentLastSeen.GetInactiveTabKeys().ToList();
+			var closedTabsCtr = 0;
 
-            DateTime lastWindowAction;
+			foreach (var tab in inactiveWindows.Where(x => allWindows.ContainsKey(x.Window)))
+			{
+				if (closedTabsCtr >= closeMaxTabs)
+				{
+					break;
+				}
 
-            try
-            {
-                if (window != VisualStudio.ActiveWindow
-                    && (window.Document == null
-                        || (window.Document.Saved && !Provider.IsWindowPinned(window.Document.FullName))))
-                {
-                    documentLastSeen.TryRemove(window, out lastWindowAction);
+				Window window = allWindows[tab.Window];
 
-                    window.Close();
-                    return true;
-                }
-            }
-            catch (Exception)
-            {
-                documentLastSeen.TryRemove(window, out lastWindowAction);
-            }
+				if (CloseDocumentWindow(window))
+				{
+					closedTabsCtr++;
+				}
+			}
 
-            return false;
-        }
+			if (closedTabsCtr > 0)
+			{
+				Log.Message("Closed {0} tabs that were inactive for longer than {1} minutes", closedTabsCtr, Settings.TabTimeoutMinutes);
+			}
+		}
 
-        /// <summary>
-        ///     Closes stale windows that haven't been viewed recently
-        /// </summary>
-        private void CloseStaleWindows()
-        {
-            var allWindows = VisualStudio.Windows.GetDocumentWindows().ToDictionary(x => x);
-            var closeMaxTabs = allWindows.Count - Settings.TabCloseThreshold;
-            var inactiveWindows = documentLastSeen.GetInactiveTabKeys().ToList();
-            var closedTabsCtr = 0;
+		/// <summary>
+		///     Close the oldest windows to keep the maximum open document tab count at threshold
+		/// </summary>
+		private void CloseOldestWindows()
+		{
+			ThreadHelper.ThrowIfNotOnUIThread("Not on UI thread");
+			var allWindows = VisualStudio.Windows.GetDocumentWindows().ToDictionary(x => x);
 
-            foreach (var tab in inactiveWindows.Where(x => allWindows.ContainsKey(x.Window)))
-            {
-                if (closedTabsCtr >= closeMaxTabs)
-                {
-                    break;
-                }
+			// Count only UNPINNED windows
+			var unpinnedCount = allWindows.Count(w =>
+				w.Key.Document != null && !Provider.IsWindowPinned(w.Key.Document.FullName));
 
-                Window window = allWindows[tab.Window];
+			System.Diagnostics.Debug.WriteLine($"[TidyTabs] CloseOldestWindows START: {unpinnedCount} unpinned windows, max={Settings.MaxOpenTabs}");
 
-                if (CloseDocumentWindow(window))
-                {
-                    closedTabsCtr++;
-                }
-            }
+			if (unpinnedCount <= Settings.MaxOpenTabs)
+			{
+				System.Diagnostics.Debug.WriteLine($"[TidyTabs] Already at threshold, returning");
+				return;
+			}
 
-            if (closedTabsCtr > 0)
-            {
-                Log.Message("Closed {0} tabs that were inactive for longer than {1} minutes", closedTabsCtr, Settings.TabTimeoutMinutes);
-            }
-        }
+			int tabsToClose = unpinnedCount - Settings.MaxOpenTabs;
+			int tabsClosed = 0;
 
-        /// <summary>
-        ///     Close the oldest windows to keep the maximum open document tab count at threshold
-        /// </summary>
-        private void CloseOldestWindows()
-        {
-            var allWindows = VisualStudio.Windows.GetDocumentWindows().ToDictionary(x => x);
+			System.Diagnostics.Debug.WriteLine($"[TidyTabs] Need to close {tabsToClose} tabs");
 
-            int startingWindowCount = allWindows.Count;
-            int documentWindows = startingWindowCount;
+			foreach (var documentPath in documentLastSeen.OrderBy(x => x.Value).Select(x => x.Key))
+			{
+				if (tabsClosed >= tabsToClose)
+				{
+					System.Diagnostics.Debug.WriteLine($"[TidyTabs] Reached target ({tabsClosed}), breaking");
+					break;
+				}
 
-            foreach (var documentPath in documentLastSeen.OrderBy(x => x.Value).Select(x => x.Key))
-            {
-                if (documentWindows <= Settings.MaxOpenTabs)
-                {
-                    break;
-                }
+				if (!allWindows.ContainsKey(documentPath))
+				{
+					System.Diagnostics.Debug.WriteLine($"[TidyTabs] Window not in allWindows, skipping");
+					continue;
+				}
 
-                if (CloseDocumentWindow(allWindows[documentPath]))
-                {
-                    documentWindows--;
-                }
-            }
+				if (CloseDocumentWindow(allWindows[documentPath]))
+				{
+					tabsClosed++;
+					System.Diagnostics.Debug.WriteLine($"[TidyTabs] Closed window. Total: {tabsClosed}/{tabsToClose}");
+				}
+				else
+				{
+					System.Diagnostics.Debug.WriteLine($"[TidyTabs] Failed to close window");
+				}
+			}
 
-            if (documentWindows != startingWindowCount)
-            {
-                Log.Message("Closed {0} tabs to maintain a max open document count of {1}", startingWindowCount - documentWindows, Settings.MaxOpenTabs);
-            }
-        }
+			System.Diagnostics.Debug.WriteLine($"[TidyTabs] CloseOldestWindows END: Closed {tabsClosed} tabs");
+		}
 
-        /// <summary>Removes the document from the last seen cache when it is being closed</summary>
-        /// <param name="document">The document being closed</param>
-        private void DocumentEventsOnDocumentClosing(Document document)
+		/// <summary>Removes the document from the last seen cache when it is being closed</summary>
+		/// <param name="document">The document being closed</param>
+		private void DocumentEventsOnDocumentClosing(Document document)
+		{
+			try
+			{
+				// Remove from tracking when manually closed
+				var windowsToRemove = documentLastSeen.Where(x => x.Key.Document == null || x.Key.Document.FullName == document.FullName)
+					.Select(x => x.Key)
+					.ToList();
+
+				foreach (var window in windowsToRemove)
+				{
+					documentLastSeen.TryRemove(window, out _);
+				}
+			}
+			catch (Exception ex)
+			{
+				Log.Exception(ex);
+			}
+		}
+
+		/// <summary>Closes stale windows when a document is saved</summary>
+		/// <param name="document">The document being saved</param>
+		private void DocumentEventsOnDocumentSaved(Document document)
         {
             try
             {
                 lastAction = DateTime.Now;
 
-                if (document == null)
-                {
-                    return;
-                }
-
-                DateTime value;
-
-                foreach (var window in document.Windows.Cast<Window>())
-                {
-                    documentLastSeen.TryRemove(window, out value);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Exception(ex);
-            }
-        }
-
-        /// <summary>Closes stale windows when a document is saved</summary>
-        /// <param name="document">The document being saved</param>
-        private void DocumentEventsOnDocumentSaved(Document document)
-        {
-            try
-            {
-                lastAction = DateTime.Now;
-                Task.Factory.StartNew(() => TidyTabs(true));
-            }
+				ThreadHelper.JoinableTaskFactory.RunAsync(async () => await TidyTabsAsync(true))
+					.FileAndForget("TidyTabs error on OnDocumentSaved");
+			}
             catch (Exception ex)
             {
                 Log.Exception(ex);
@@ -445,8 +470,9 @@ namespace DaveMcKeown.TidyTabs
             {
                 Log.Message("Tidy Tabs keyboard shortcut triggered");
 
-                Task.Factory.StartNew(() => TidyTabs(false));
-            }
+				ThreadHelper.JoinableTaskFactory.RunAsync(async () => await TidyTabsAsync(true))
+					.FileAndForget("TidyTabs error on MenuItemCommandActivated");
+			}
             catch (Exception ex)
             {
                 Log.Exception(ex);
@@ -488,11 +514,36 @@ namespace DaveMcKeown.TidyTabs
                 {
                     UpdateWindowTimestamp(lostFocus);
                 }
-            }
+
+				ThreadHelper.JoinableTaskFactory.RunAsync(async () => await TidyTabsAsync(false))
+					.FileAndForget("TidyTabs error on WindowActivated");
+			}
             catch (Exception ex)
             {
                 Log.Exception(ex);
             }
         }
-    }
+
+		private async Task TidyTabsAsync(bool autoSaveTriggered)
+		{
+			await ThreadHelper.JoinableTaskFactory.SwitchToMainThreadAsync();
+
+			if (autoSaveTriggered && !Settings.PurgeStaleTabsOnSave)
+			{
+				return;
+			}
+
+			// Give any event handlers time to fully complete before we modify windows
+			await System.Threading.Tasks.Task.Delay(100);
+
+			lock (documentPurgeLock)
+			{
+				CloseStaleWindows();
+				if (Settings.MaxOpenTabs > 0)
+				{
+					CloseOldestWindows();
+				}
+			}
+		}
+	}
 }

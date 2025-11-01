@@ -23,10 +23,25 @@ namespace DaveMcKeown.TidyTabs
         /// </summary>
         private Settings settings;
 
-        /// <summary>
-        ///     Gets or sets a value indicating whether tabs should be purged when a file is saved
-        /// </summary>
-        [LocalizedCategory("OptionPage_Behavior")]
+		public TidyTabsOptionPage()
+		{
+			// Don't access settings here
+		}
+
+		protected override void OnApply(PageApplyEventArgs e)
+		{
+			// Save only when user clicks OK
+			if (settings != null)
+			{
+				settings.Save();
+			}
+			base.OnApply(e);
+		}
+
+		/// <summary>
+		///     Gets or sets a value indicating whether tabs should be purged when a file is saved
+		/// </summary>
+		[LocalizedCategory("OptionPage_Behavior")]
         [LocalizedDisplayName("PurgeOnSave_DisplayName")]
         [LocalizedDescription("PurgeOnSave_Description")]
         public bool PurgeTabsOnSave
@@ -110,8 +125,24 @@ namespace DaveMcKeown.TidyTabs
         {
             get
             {
-                return settings ?? (settings = SettingsProvider.Instance);
-            }
+				try
+				{
+					if (settings == null)
+					{
+						settings = SettingsProvider.Instance;
+					}
+					return settings;
+				}
+				catch
+				{
+					// If settings fail to load during option page instantiation, return a default
+					if (settings == null)
+					{
+						settings = new Settings();
+					}
+					return settings;
+				}
+			}
         }
     }
 }
